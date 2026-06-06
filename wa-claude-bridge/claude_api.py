@@ -347,6 +347,7 @@ def meta(authorization: str = Header(None)):
             {"id": "meanrev", "name": "Mean Reversion", "desc": "Bollinger + RSI oversold"},
             {"id": "maosc", "name": "MA Oscillator", "desc": "EMA cross + RSI filter"},
             {"id": "regime", "name": "Regime-aware", "desc": "TREND@ADX (approx trend)"},
+            {"id": "srconf", "name": "S/R Confluence (XAU)", "desc": "Konfluensi multi-TF + bias 1D/4H — tervalidasi XAUUSD"},
         ],
         "pairs": ["XAUUSD", "XAGUSD", "AUDJPY", "CHFJPY", "EURUSD", "USDJPY", "GBPUSD", "AUDUSD", "EURJPY", "NZDUSD"],
         "tfs": ["M15", "H1", "H4", "D1"],
@@ -365,6 +366,9 @@ def backtest(strategy: str = "trend", pair: str = "XAUUSD", capital: float = 100
         api = BL.MT5Api(MT5_API, timeout=120)
         sinfo = api.symbol_info(pair)
         bars, _per = BL.fetch_bars(api, pair, tf, int(period), 4000)
+        if strategy == "srconf":
+            import sr_engine
+            return JSONResponse(sr_engine.bt(api, pair, float(capital), float(risk), int(period), rmult=2.0))
         if strategy == "regime":
             r = _run_regime(BL, bars, sinfo, float(capital), float(risk))
         else:
