@@ -10,6 +10,7 @@ tf normalisasi: 1m,5m,15m,1h,4h,1d
 from __future__ import annotations
 import socket
 import time
+import bisect
 import requests
 
 # ── Bypass blokir DNS Indonesia (Kominfo) untuk exchange via DoH Cloudflare ──
@@ -54,10 +55,13 @@ TF = {  # tf -> kode per-exchange
     "1m":  {"binance": "1m",  "bybit": "1",   "okx": "1m"},
     "5m":  {"binance": "5m",  "bybit": "5",   "okx": "5m"},
     "15m": {"binance": "15m", "bybit": "15",  "okx": "15m"},
+    "30m": {"binance": "30m", "bybit": "30",  "okx": "30m"},
     "1h":  {"binance": "1h",  "bybit": "60",  "okx": "1H"},
+    "2h":  {"binance": "2h",  "bybit": "120", "okx": "2H"},
     "4h":  {"binance": "4h",  "bybit": "240", "okx": "4H"},
     "1d":  {"binance": "1d",  "bybit": "D",   "okx": "1D"},
 }
+SEC = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400}
 
 
 class _Base:
@@ -273,8 +277,8 @@ class Hyperliquid(_Base):
     Bonus: ctx punya funding & openInterest (perp). high24/low24 tak disediakan API -> 0."""
     name = "hyperliquid"
     BASE = "https://api.hyperliquid.xyz"
-    _IV = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
-    _SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+    _IV = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "2h": "2h", "4h": "4h", "1d": "1d"}
+    _SEC = SEC
     _ctx_cache = {"t": 0.0, "data": None}  # cache lvl-class (TTL 10s) — hemat POST
 
     def sym(self, base): return base
@@ -351,6 +355,84 @@ def make(name: str, quote: str = "USDT") -> _Base:
 
 def all_clients(quote: str = "USDT") -> dict:
     return {n: c(quote) for n, c in EXCHANGES.items()}
+
+
+def history(base: str, tf: str = "30m", days: int = 365, quote: str = "USDT") -> list:
+    """Klines historis DALAM via Binance paginated (limit 1000/req). Return bars ascending."""
+    c = Binance(quote); sym = c.sym(base); iv = TF[tf]["binance"]; sec = SEC[tf]
+    end = int(time.time() * 1000); start = end - days * 86400 * 1000
+    out = []; cur = start
+    while cur < end:
+        try:
+            d = c._get(f"{c.BASE}/api/v3/klines",
+                       {"symbol": sym, "interval": iv, "startTime": cur, "endTime": end, "limit": 1000})
+        except Exception:
+            break
+        if not d:
+            break
+        for k in d:
+            out.append(dict(time=int(k[0]) // 1000, open=float(k[1]), high=float(k[2]),
+                            low=float(k[3]), close=float(k[4]), volume=float(k[5])))
+        nxt = int(d[-1][0]) + sec * 1000
+        if nxt <= cur or len(d) < 1000:
+            break
+        cur = nxt
+    return out
+
+
+def history_fut(base: str, tf: str = "4h", days: int = 720, quote: str = "USDT") -> list:
+    """Klines FUTURES (USDT-M perp) via Binance fapi paginated (limit 1500/req). Ascending."""
+    c = Binance(quote); sym = c.sym(base); iv = TF[tf]["binance"]; sec = SEC[tf]
+    end = int(time.time() * 1000); start = end - days * 86400 * 1000
+    out = []; cur = start
+    while cur < end:
+        try:
+            d = c._get(f"{c.FBASE}/fapi/v1/klines",
+                       {"symbol": sym, "interval": iv, "startTime": cur, "endTime": end, "limit": 1500})
+        except Exception:
+            break
+        if not d:
+            break
+        for k in d:
+            out.append(dict(time=int(k[0]) // 1000, open=float(k[1]), high=float(k[2]),
+                            low=float(k[3]), close=float(k[4]), volume=float(k[5])))
+        nxt = int(d[-1][0]) + sec * 1000
+        if nxt <= cur or len(d) < 1500:
+            break
+        cur = nxt
+    return out
+
+
+def funding_history(base: str, days: int = 720, quote: str = "USDT") -> list:
+    """History funding rate perp (tiap 8 jam) Binance fapi. Return list (time_sec, rate)."""
+    c = Binance(quote); sym = c.sym(base)
+    end = int(time.time() * 1000); start = end - days * 86400 * 1000
+    out = []; cur = start
+    while cur < end:
+        try:
+            d = c._get(f"{c.FBASE}/fapi/v1/fundingRate",
+                       {"symbol": sym, "startTime": cur, "endTime": end, "limit": 1000})
+        except Exception:
+            break
+        if not d:
+            break
+        for x in d:
+            out.append((int(x["fundingTime"]) // 1000, float(x["fundingRate"])))
+        nxt = int(d[-1]["fundingTime"]) + 1
+        if nxt <= cur or len(d) < 1000:
+            break
+        cur = nxt
+    return out
+
+
+def fund_per_bar(bars: list, funding: list) -> list:
+    """Petakan funding-rate ke per-bar: fb[i] = Σ rate dgn fundingTime di (bars[i-1], bars[i]]."""
+    n = len(bars); fb = [0.0] * n
+    f = sorted(funding); times = [t for t, _ in f]
+    for i in range(1, n):
+        a = bisect.bisect_right(times, bars[i - 1]["time"]); b = bisect.bisect_right(times, bars[i]["time"])
+        fb[i] = sum(r for _, r in f[a:b])
+    return fb
 
 
 def best_klines(base: str, tf: str = "1d", limit: int = 300,

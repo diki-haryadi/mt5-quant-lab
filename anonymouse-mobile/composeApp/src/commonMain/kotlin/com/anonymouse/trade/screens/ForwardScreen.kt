@@ -31,10 +31,11 @@ fun ForwardScreen(st: AppState) {
     LaunchedEffect(mk, refreshKey) {
         fwd = null
         val api = bridgeApi()
-        if (mk == "crypto" || api == null) { fwd = mockForward(mk); return@LaunchedEffect }
+        if (api == null) { fwd = mockForward(mk); return@LaunchedEffect }
         loading = true
-        val text = runCatching { api.getCache("forward_$mk") }.getOrNull()
-        fwd = text?.let { parseForward(it) }?.takeIf { it.balance > 0 || it.positions.isNotEmpty() } ?: mockForward(mk)
+        val text = runCatching { if (mk == "crypto") api.getCrypto() else api.getCache("forward_$mk") }.getOrNull()
+        val parsed = if (mk == "crypto") text?.let { parseCrypto(it) } else text?.let { parseForward(it) }
+        fwd = parsed?.takeIf { it.balance > 0 || it.positions.isNotEmpty() } ?: mockForward(mk)
         loading = false
     }
     // PnL forex REAL-TIME (polling 4 detik) — override snapshot saat market=forex

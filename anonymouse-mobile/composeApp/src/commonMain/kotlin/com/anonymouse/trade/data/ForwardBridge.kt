@@ -53,6 +53,37 @@ private fun extractJsonObj(text: String): String? {
     return null
 }
 
+// ---------- crypto paper (snapshot /v1/crypto dari mom_paper.py) ----------
+@Serializable
+data class CrOpenDto(val sym: String = "", val side: String = "", val entry: Double = 0.0, val stop: Double = 0.0,
+                     val price: Double = 0.0, val qty: Double = 0.0, val uPL: Double = 0.0, val uR: Double = 0.0)
+@Serializable
+data class CrClosedDto(val t: String = "", val sym: String = "", val side: String = "", val reason: String = "",
+                       val pl: Double = 0.0, val R: Double = 0.0, val equity: Double = 0.0)
+@Serializable
+data class CrSnapDto(val updated: String = "", val tf: String = "", val equity: Double = 0.0, val start: Double = 10000.0,
+                     val roi_pct: Double = 0.0, val float_upl: Double = 0.0, val open: List<CrOpenDto> = emptyList(),
+                     val closed_recent: List<CrClosedDto> = emptyList(), val wins: Int = 0, val losses: Int = 0)
+
+/** parse snapshot /v1/crypto → FwdDto (reuse UI Forward). */
+fun parseCrypto(text: String): FwdDto? {
+    val d = runCatching { fwdJson.decodeFromString<CrSnapDto>(text) }.getOrNull() ?: return null
+    val pos = d.open.map { o ->
+        val pnlPct = (if (o.side.lowercase() == "long") (o.price / o.entry - 1) else (1 - o.price / o.entry)) * 100
+        FwdPosDto(sym = o.sym, side = o.side.uppercase(), qty = o.qty.toString(), entry = o.entry,
+                  mark = o.price, pnlPct = pnlPct, pnl = o.uPL)
+    }
+    val feed = d.closed_recent.map { c ->
+        FwdFeedDto(t = c.t, kind = if (c.pl >= 0) "tp" else "sl",
+                   txt = "${c.sym} ${c.side.uppercase()} ${c.reason} \$${c.pl} (${c.R}R)")
+    }
+    val eq = (listOf(d.start) + d.closed_recent.reversed().map { it.equity } + listOf(d.equity)).filter { it > 0 }
+    val wr = if (d.wins + d.losses > 0) d.wins * 100 / (d.wins + d.losses) else 0
+    return FwdDto(balance = d.equity, currency = "USD", equity = eq,
+                  openPnlPct = if (d.start > 0) d.float_upl / d.start * 100 else 0.0,
+                  winRate = wr, positions = pos, feed = feed, source = "crypto-momentum (futures paper)")
+}
+
 /** fallback dari MockData → FwdDto (untuk crypto / offline). */
 fun mockForward(market: String): FwdDto {
     val pos = DB.paperPositions(market).map { FwdPosDto(it.sym, it.side, it.qty, it.entry, it.mark, it.pnlPct) }

@@ -79,6 +79,9 @@ class BridgeApi(
     /** riwayat backtest dari RAG. */
     suspend fun getRuns(limit: Int = 30): String = client.get(url("/v1/runs?limit=$limit")) { auth() }.bodyAsText()
 
+    /** snapshot paper-trade crypto momentum (futures) — instan, tanpa Claude. */
+    suspend fun getCrypto(): String = client.get(url("/v1/crypto")) { auth() }.bodyAsText()
+
     /** backtest CEPAT via engine langsung (detik). */
     suspend fun getBacktest(strategy: String, pair: String, capital: Int, risk: Float, period: Int, tf: String = "M15"): String =
         client.get(url("/v1/backtest?strategy=$strategy&pair=$pair&capital=$capital&risk=$risk&period=$period&tf=$tf")) { auth() }.bodyAsText()
